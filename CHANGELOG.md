@@ -1,3 +1,9 @@
+## [0.2.0] - 2026-04-07
+### Changed
+- Parse HTML once per request instead of twice, improving performance on large pages
+- Resolve relative links to absolute URLs using `og:url` (or `request.url` as fallback)
+- Capture all `article:tag` meta tags as a YAML list instead of only the first
+
 ## [0.1.0] - 2026-03-26
 ### Added
 - Initial release

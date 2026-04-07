@@ -2,6 +2,7 @@
 
 import logging
 
+from bs4 import BeautifulSoup
 from flask import request
 
 from .converter import (
@@ -68,13 +69,25 @@ class MarkdownResponse:
 
         try:
             html = response.get_data(as_text=True)
+            soup = BeautifulSoup(html, "html.parser")
 
-            frontmatter = extract_frontmatter(html)
+            frontmatter = extract_frontmatter(html, soup=soup)
+
+            # Use og:url as base for resolving relative links
+            og_url = soup.find("meta", attrs={"property": "og:url"})
+            base_url = (
+                og_url["content"].strip()
+                if og_url and og_url.get("content")
+                else request.url
+            )
+
             markdown_body = convert_html_to_markdown(
                 html,
                 content_selector=self.content_selector,
                 strip_elements=self.strip_elements,
                 strip_classes=self.strip_classes,
+                soup=soup,
+                base_url=base_url,
             )
 
             markdown_output = frontmatter + "\n" + markdown_body
