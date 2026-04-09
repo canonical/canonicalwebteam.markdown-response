@@ -59,7 +59,24 @@ class TestFrontmatter(unittest.TestCase):
         result = extract_frontmatter(html)
         self.assertIn("author: Jane Doe", result)
         self.assertIn("date: '2025-06-15'", result)
-        self.assertIn("tags: kubernetes", result)
+        self.assertIn("- kubernetes", result)
+
+    def test_extracts_multiple_tags(self):
+        html = """
+        <html>
+        <head>
+            <title>Blog Post | Canonical</title>
+            <meta property="article:tag" content="kubernetes" />
+            <meta property="article:tag" content="cloud" />
+            <meta property="article:tag" content="security" />
+        </head>
+        <body></body>
+        </html>
+        """
+        result = extract_frontmatter(html)
+        self.assertIn("- kubernetes", result)
+        self.assertIn("- cloud", result)
+        self.assertIn("- security", result)
 
     def test_omits_missing_fields(self):
         html = """
@@ -255,6 +272,25 @@ class TestConverter(unittest.TestCase):
         result = convert_html_to_markdown(html)
         self.assertIn("Pick a tab", result)
 
+    def test_resolves_relative_links(self):
+        html = """
+        <html>
+        <head><title>Test | Canonical</title></head>
+        <body>
+            <div id="main-content">
+                <a href="/blog/post">Blog post</a>
+                <a href="https://example.com/abs">Absolute</a>
+            </div>
+        </body>
+        </html>
+        """
+        result = convert_html_to_markdown(
+            html, base_url="https://canonical.com/page"
+        )
+        self.assertIn("https://canonical.com/blog/post", result)
+        self.assertIn("https://example.com/abs", result)
+        self.assertNotIn("(/blog/post)", result)
+
     def test_custom_content_selector(self):
         html = """
         <html>
@@ -326,6 +362,30 @@ class TestMarkdownResponse(unittest.TestCase):
         body = response.data.decode("utf-8")
         self.assertNotIn("Home", body)
         self.assertNotIn("Footer", body)
+
+    def test_format_md_resolves_relative_links(self):
+        @self.app.route("/links")
+        def links_page():
+            return """
+            <html>
+            <head>
+                <title>Links | Canonical</title>
+                <meta property="og:url"
+                      content="https://canonical.com/links" />
+            </head>
+            <body>
+                <div id="main-content">
+                    <a href="/blog/post">Relative</a>
+                    <a href="https://example.com">Absolute</a>
+                </div>
+            </body>
+            </html>
+            """
+
+        response = self.client.get("/links?format=md")
+        body = response.data.decode("utf-8")
+        self.assertIn("https://canonical.com/blog/post", body)
+        self.assertIn("https://example.com", body)
 
     def test_skips_non_html_responses(self):
         @self.app.route("/api")

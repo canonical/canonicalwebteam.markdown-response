@@ -1,6 +1,8 @@
 """Extract content from HTML and convert to Markdown."""
 
 import re
+from urllib.parse import urljoin
+
 from bs4 import BeautifulSoup
 from markdownify import markdownify
 
@@ -16,6 +18,8 @@ def convert_html_to_markdown(
     content_selector=DEFAULT_CONTENT_SELECTOR,
     strip_elements=None,
     strip_classes=None,
+    soup=None,
+    base_url=None,
 ):
     """Convert an HTML page to clean Markdown.
 
@@ -23,13 +27,17 @@ def convert_html_to_markdown(
     elements, and converts the remaining HTML to Markdown.
 
     Elements with the data-md-strip attribute are always removed.
+
+    If *soup* is provided it is used directly, avoiding a redundant parse.
+    If *base_url* is provided, relative links are resolved to absolute URLs.
     """
     if strip_elements is None:
         strip_elements = DEFAULT_STRIP_ELEMENTS
     if strip_classes is None:
         strip_classes = DEFAULT_STRIP_CLASSES
 
-    soup = BeautifulSoup(html, "html.parser")
+    if soup is None:
+        soup = BeautifulSoup(html, "html.parser")
 
     # Extract content area — fall back to <body> if selector not found
     content = soup.select_one(content_selector)
@@ -51,6 +59,11 @@ def convert_html_to_markdown(
     # Strip elements marked with data-md-strip attribute
     for tag in content.find_all(attrs={STRIP_DATA_ATTR: True}):
         tag.decompose()
+
+    # Resolve relative URLs to absolute
+    if base_url:
+        for tag in content.find_all("a", href=True):
+            tag["href"] = urljoin(base_url, tag["href"])
 
     # Convert to Markdown
     md = markdownify(str(content), heading_style="ATX", strip=["img"])
