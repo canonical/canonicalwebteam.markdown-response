@@ -6,7 +6,11 @@ from canonicalwebteam.markdown_response.frontmatter import (
 from canonicalwebteam.markdown_response.converter import (
     convert_html_to_markdown,
 )
-from canonicalwebteam.markdown_response import MarkdownResponse
+from canonicalwebteam.markdown_response import (
+    MarkdownResponse,
+    add_suffix,
+    strip_suffix,
+)
 
 
 class TestFrontmatter(unittest.TestCase):
@@ -422,3 +426,242 @@ class TestMarkdownResponse(unittest.TestCase):
         client2 = app2.test_client()
         response = client2.get("/custom?format=md")
         self.assertIn(b"Custom content.", response.data)
+
+
+PAGE = """
+<html>
+<head>
+    <title>{title} | Canonical</title>
+    <meta property="og:url" content="https://canonical.com{path}" />
+</head>
+<body>
+    <div id="main-content"><h1>{title}</h1></div>
+</body>
+</html>
+"""
+
+
+def page(title, path):
+    return PAGE.format(title=title, path=path)
+
+
+def login_required(view):
+    def is_user_logged_in(*args, **kwargs):
+        return view(*args, **kwargs)
+
+    is_user_logged_in.__wrapped__ = view
+    return is_user_logged_in
+
+
+def is_login_gated(view):
+    while view is not None:
+        if getattr(view, "__name__", None) == "is_user_logged_in":
+            return True
+        view = getattr(view, "__wrapped__", None)
+    return False
+
+
+def make_app(**kwargs):
+    app = flask.Flask(__name__)
+
+    @app.route("/")
+    def home():
+        return page("Home", "/")
+
+    @app.route("/about")
+    def about():
+        return page("About", "/about")
+
+    @app.route("/docs/")
+    def docs():
+        return page("Docs", "/docs/")
+
+    @app.route("/account")
+    @login_required
+    def account():
+        return page("Account", "/account")
+
+    @app.route("/query")
+    def query():
+        return flask.jsonify(dict(flask.request.args))
+
+    @app.route("/link")
+    def link():
+        return flask.render_template_string("{{ markdown_path }}")
+
+    MarkdownResponse(app, **kwargs)
+    return app
+
+
+class TestSuffixHelpers(unittest.TestCase):
+    def test_add_suffix(self):
+        self.assertEqual(add_suffix("/about", ".md"), "/about.md")
+        self.assertEqual(add_suffix("/", ".md"), "/index.md")
+        self.assertEqual(add_suffix("/docs/", ".md"), "/docs/index.md")
+
+    def test_strip_suffix(self):
+        self.assertEqual(strip_suffix("/about.md", ".md"), "/about")
+        self.assertEqual(
+            strip_suffix("/about/publish.md", ".md"), "/about/publish"
+        )
+        self.assertEqual(strip_suffix("/index.md", ".md"), "/")
+        self.assertEqual(strip_suffix("/docs/index.md", ".md"), "/docs/")
+        self.assertEqual(strip_suffix("/.md", ".md"), "/")
+
+    def test_round_trip(self):
+        for path in ["/", "/about", "/about/publish", "/docs/"]:
+            self.assertEqual(
+                strip_suffix(add_suffix(path, ".md"), ".md"), path
+            )
+
+
+class TestDefaultsUnchanged(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app()
+        self.client = self.app.test_client()
+
+    def test_suffix_is_not_served(self):
+        self.assertEqual(self.client.get("/about.md").status_code, 404)
+
+    def test_query_param_still_works(self):
+        response = self.client.get("/about?format=md")
+        self.assertIn("text/markdown", response.content_type)
+        self.assertIn(b"# About", response.data)
+
+    def test_no_cache_control_header(self):
+        response = self.client.get("/about?format=md")
+        self.assertNotIn("Cache-Control", response.headers)
+
+    def test_private_pages_are_not_blocked(self):
+        response = self.client.get("/account?format=md")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/markdown", response.content_type)
+
+    def test_no_markdown_path_in_templates(self):
+        self.assertEqual(self.client.get("/link").data, b"")
+
+    def test_markdown_path_is_none(self):
+        with self.app.test_request_context("/about"):
+            extension = self.app.extensions["markdown_response"]
+            self.assertIsNone(extension.markdown_path())
+
+
+class TestSuffix(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app(suffix=".md")
+        self.client = self.app.test_client()
+
+    def test_suffix_returns_markdown(self):
+        response = self.client.get("/about.md")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/markdown", response.content_type)
+        self.assertIn(b"# About", response.data)
+        self.assertIn(b"title: About", response.data)
+
+    def test_index_md_is_the_homepage(self):
+        response = self.client.get("/index.md")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"# Home", response.data)
+
+    def test_index_md_under_a_directory(self):
+        response = self.client.get("/docs/index.md")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"# Docs", response.data)
+
+    def test_html_is_still_served_without_suffix(self):
+        response = self.client.get("/about")
+        self.assertIn("text/html", response.content_type)
+        self.assertIn(b"<h1>About</h1>", response.data)
+
+    def test_existing_query_string_is_kept(self):
+        response = self.client.get("/query.md?page=2")
+        self.assertEqual(response.get_json(), {"page": "2", "format": "md"})
+
+    def test_unknown_page_is_404(self):
+        self.assertEqual(self.client.get("/missing.md").status_code, 404)
+
+    def test_markdown_path_in_templates(self):
+        self.assertEqual(self.client.get("/link").data, b"/link.md")
+
+    def test_markdown_path_for_the_homepage(self):
+        with self.app.test_request_context("/"):
+            extension = self.app.extensions["markdown_response"]
+            self.assertEqual(extension.markdown_path(), "/index.md")
+
+    def test_static_files_are_left_alone(self):
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as static_folder:
+            with open(os.path.join(static_folder, "README.md"), "w") as f:
+                f.write("# Not converted\n")
+
+            app = flask.Flask(
+                __name__,
+                static_folder=static_folder,
+                static_url_path="/static",
+            )
+            MarkdownResponse(app, suffix=".md")
+
+            response = app.test_client().get("/static/README.md")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b"# Not converted\n")
+
+    def test_custom_query_param_is_internal(self):
+        app = make_app(suffix=".md", query_param="_markdown", query_value="1")
+        client = app.test_client()
+
+        self.assertIn(b"# About", client.get("/about.md").data)
+        self.assertIn("text/html", client.get("/about?format=md").content_type)
+
+
+class TestPrivatePages(unittest.TestCase):
+    def setUp(self):
+        self.app = make_app(suffix=".md", is_private=is_login_gated)
+        self.client = self.app.test_client()
+
+    def test_private_page_has_no_markdown(self):
+        self.assertEqual(self.client.get("/account.md").status_code, 404)
+        self.assertEqual(
+            self.client.get("/account?format=md").status_code, 404
+        )
+
+    def test_private_page_html_is_untouched(self):
+        response = self.client.get("/account")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/html", response.content_type)
+
+    def test_public_page_still_has_markdown(self):
+        self.assertIn(b"# About", self.client.get("/about.md").data)
+
+    def test_markdown_path_is_none_for_private_pages(self):
+        with self.app.test_request_context("/account"):
+            extension = self.app.extensions["markdown_response"]
+            self.assertIsNone(extension.markdown_path())
+
+    def test_markdown_path_is_none_for_unknown_pages(self):
+        with self.app.test_request_context("/missing"):
+            extension = self.app.extensions["markdown_response"]
+            self.assertIsNone(extension.markdown_path())
+
+    def test_is_private_without_suffix(self):
+        app = make_app(is_private=is_login_gated)
+        client = app.test_client()
+
+        self.assertEqual(client.get("/account?format=md").status_code, 404)
+        self.assertIn(b"# About", client.get("/about?format=md").data)
+
+
+class TestCacheControl(unittest.TestCase):
+    def test_header_is_set_on_markdown(self):
+        app = make_app(cache_control="private, max-age=3600")
+        response = app.test_client().get("/about?format=md")
+        self.assertEqual(
+            response.headers["Cache-Control"], "private, max-age=3600"
+        )
+
+    def test_header_is_not_set_on_html(self):
+        app = make_app(cache_control="private, max-age=3600")
+        response = app.test_client().get("/about")
+        self.assertNotIn("Cache-Control", response.headers)
