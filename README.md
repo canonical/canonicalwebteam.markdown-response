@@ -35,8 +35,18 @@ MarkdownResponse(app,
     strip_classes=["u-hide", "u-off-screen"],  # Classes to remove
     query_param="format",  # Query parameter name
     query_value="md",  # Query parameter value
+    title_suffixes=[  # Suffixes stripped from the end of <title>
+        " | Canonical",
+        " | Trusted open source for enterprises",
+        " | Ubuntu",
+    ],
 )
 ```
+
+The `query_param` (e.g. `format=md`) is also removed from the frontmatter
+`url` and from the base URL used to resolve relative links, so links and
+the extracted `og:url` don't carry the Markdown query string. Other query
+parameters (e.g. UTM parameters) are preserved.
 
 ## Template-level exclusion
 

@@ -1,10 +1,25 @@
 """Extract metadata from HTML <head> into YAML frontmatter."""
 
+import re
+
 import yaml
 from bs4 import BeautifulSoup
 
+from .urls import strip_query_param
 
-def extract_frontmatter(html, soup=None):
+# Suffixes stripped from the end of <title> content by default. Sites
+# commonly append a site name to every page title (often via a shared
+# template), which is redundant once the title is used as frontmatter.
+DEFAULT_TITLE_SUFFIXES = [
+    " | Canonical",
+    " | Trusted open source for enterprises",
+    " | Ubuntu",
+]
+
+
+def extract_frontmatter(
+    html, soup=None, title_suffixes=None, strip_query_param_name=None
+):
     """Parse HTML and return YAML frontmatter string from <head> meta tags.
 
     Returns a string like:
@@ -15,17 +30,26 @@ def extract_frontmatter(html, soup=None):
         ---
 
     If *soup* is provided it is used directly, avoiding a redundant parse.
+
+    *title_suffixes* overrides the list of suffixes stripped from the end
+    of the page title (defaults to DEFAULT_TITLE_SUFFIXES).
+
+    *strip_query_param_name*, if given, is a query parameter name to
+    remove from the extracted `url` (og:url), leaving other query
+    parameters intact.
     """
     if soup is None:
         soup = BeautifulSoup(html, "html.parser")
+    if title_suffixes is None:
+        title_suffixes = DEFAULT_TITLE_SUFFIXES
     meta = {}
 
-    # Title — strip common suffixes
+    # Title — collapse internal whitespace, then strip common suffixes
     title_tag = soup.find("title")
     if title_tag and title_tag.string:
-        title = title_tag.string.strip()
-        title = title.removesuffix(" | Canonical")
-        title = title.removesuffix(" | Trusted open source for enterprises")
+        title = re.sub(r"\s+", " ", title_tag.string).strip()
+        for suffix in title_suffixes:
+            title = title.removesuffix(suffix)
         title = title.strip()
         if title:
             meta["title"] = title
@@ -38,6 +62,8 @@ def extract_frontmatter(html, soup=None):
     # URL
     url = _get_meta_property(soup, "og:url")
     if url:
+        if strip_query_param_name:
+            url = strip_query_param(url, strip_query_param_name)
         meta["url"] = url
 
     # Author

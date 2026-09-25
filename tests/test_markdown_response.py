@@ -122,6 +122,64 @@ class TestFrontmatter(unittest.TestCase):
             "description: Multi line description with extra spaces", result
         )
 
+    def test_collapses_multiline_title_and_strips_ubuntu_suffix(self):
+        html = """
+        <html>
+        <head>
+            <title>What is Kubernetes?\n    | Ubuntu</title>
+        </head>
+        <body></body>
+        </html>
+        """
+        result = extract_frontmatter(html)
+        self.assertIn("title: What is Kubernetes?", result)
+        self.assertNotIn("\n    | Ubuntu", result)
+        self.assertNotIn("| Ubuntu", result)
+
+    def test_custom_title_suffixes(self):
+        html = """
+        <html>
+        <head><title>Custom Page | Acme Corp</title></head>
+        <body></body>
+        </html>
+        """
+        result = extract_frontmatter(html, title_suffixes=[" | Acme Corp"])
+        self.assertIn("title: Custom Page", result)
+        self.assertNotIn("Acme Corp", result)
+
+    def test_strips_query_param_from_url(self):
+        html = """
+        <html>
+        <head>
+            <title>Page | Canonical</title>
+            <meta property="og:url"
+                  content="https://ubuntu.com/kubernetes?format=md" />
+        </head>
+        <body></body>
+        </html>
+        """
+        result = extract_frontmatter(html, strip_query_param_name="format")
+        self.assertIn("url: https://ubuntu.com/kubernetes", result)
+        self.assertNotIn("format=md", result)
+
+    def test_strips_query_param_but_keeps_other_params(self):
+        url = (
+            "https://ubuntu.com/kubernetes"
+            "?format=md&amp;utm_source=newsletter"
+        )
+        html = f"""
+        <html>
+        <head>
+            <title>Page | Canonical</title>
+            <meta property="og:url" content="{url}" />
+        </head>
+        <body></body>
+        </html>
+        """
+        result = extract_frontmatter(html, strip_query_param_name="format")
+        self.assertIn("utm_source=newsletter", result)
+        self.assertNotIn("format=md", result)
+
 
 class TestConverter(unittest.TestCase):
     def test_extracts_main_content(self):
@@ -362,6 +420,57 @@ class TestMarkdownResponse(unittest.TestCase):
         body = response.data.decode("utf-8")
         self.assertNotIn("Home", body)
         self.assertNotIn("Footer", body)
+
+    def test_format_md_strips_format_param_from_og_url(self):
+        @self.app.route("/og-url")
+        def og_url_page():
+            return """
+            <html>
+            <head>
+                <title>OG URL | Canonical</title>
+                <meta property="og:url"
+                      content="https://ubuntu.com/og-url?format=md" />
+            </head>
+            <body>
+                <div id="main-content">
+                    <a href="/relative">Relative</a>
+                </div>
+            </body>
+            </html>
+            """
+
+        response = self.client.get("/og-url?format=md")
+        body = response.data.decode("utf-8")
+        self.assertIn("url: https://ubuntu.com/og-url", body)
+        self.assertNotIn("format=md", body)
+        self.assertIn("https://ubuntu.com/relative", body)
+
+    def test_format_md_keeps_other_query_params_from_og_url(self):
+        og_url = (
+            "https://ubuntu.com/og-url-params"
+            "?utm_source=newsletter&format=md"
+        )
+
+        @self.app.route("/og-url-params")
+        def og_url_params_page():
+            return f"""
+            <html>
+            <head>
+                <title>OG URL Params | Canonical</title>
+                <meta property="og:url" content="{og_url}" />
+            </head>
+            <body>
+                <div id="main-content">
+                    <a href="/relative">Relative</a>
+                </div>
+            </body>
+            </html>
+            """
+
+        response = self.client.get("/og-url-params?format=md")
+        body = response.data.decode("utf-8")
+        self.assertIn("utm_source=newsletter", body)
+        self.assertNotIn("format=md", body)
 
     def test_format_md_resolves_relative_links(self):
         @self.app.route("/links")
