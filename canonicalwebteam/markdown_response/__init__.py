@@ -11,7 +11,8 @@ from .converter import (
     DEFAULT_STRIP_ELEMENTS,
     convert_html_to_markdown,
 )
-from .frontmatter import extract_frontmatter
+from .frontmatter import DEFAULT_TITLE_SUFFIXES, extract_frontmatter
+from .urls import strip_query_param
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,11 @@ class MarkdownResponse:
             strip_classes=["u-hide", "u-off-screen"],
             query_param="format",
             query_value="md",
+            title_suffixes=[
+                " | Canonical",
+                " | Trusted open source for enterprises",
+                " | Ubuntu",
+            ],
         )
     """
 
@@ -47,6 +53,9 @@ class MarkdownResponse:
         self.strip_classes = kwargs.get("strip_classes", DEFAULT_STRIP_CLASSES)
         self.query_param = kwargs.get("query_param", "format")
         self.query_value = kwargs.get("query_value", "md")
+        self.title_suffixes = kwargs.get(
+            "title_suffixes", DEFAULT_TITLE_SUFFIXES
+        )
 
         if app is not None:
             self.init_app(app)
@@ -71,7 +80,12 @@ class MarkdownResponse:
             html = response.get_data(as_text=True)
             soup = BeautifulSoup(html, "html.parser")
 
-            frontmatter = extract_frontmatter(html, soup=soup)
+            frontmatter = extract_frontmatter(
+                html,
+                soup=soup,
+                title_suffixes=self.title_suffixes,
+                strip_query_param_name=self.query_param,
+            )
 
             # Use og:url as base for resolving relative links
             og_url = soup.find("meta", attrs={"property": "og:url"})
@@ -80,6 +94,8 @@ class MarkdownResponse:
                 if og_url and og_url.get("content")
                 else request.url
             )
+            # Drop the ?format=md param, keeping any other query params
+            base_url = strip_query_param(base_url, self.query_param)
 
             markdown_body = convert_html_to_markdown(
                 html,
