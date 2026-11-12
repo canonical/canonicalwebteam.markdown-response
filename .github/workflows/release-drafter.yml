@@ -5,15 +5,19 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+  pull-requests: read
+
 jobs:
   get_version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get_version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: get_version
-        run: echo "##[set-output name=version;]"$(grep '^[[:blank:]]*version' setup.py | cut -d'"' -f 2)
+        run: echo "version=$(grep '^[[:blank:]]*version' setup.py | cut -d'"' -f 2)" >> "$GITHUB_OUTPUT"
 
   update_release_draft:
     needs: get_version
